@@ -27,12 +27,17 @@ export const useCreateInvestor = () => {
       promised_return?: number;
       joining_date?: string;
     }) => {
+      console.log("Creating investor payload:", investor);
       const { data, error } = await supabase
         .from("investors")
         .insert(investor)
         .select()
         .single();
-      if (error) throw error;
+      if (error) {
+        console.error("Supabase error creating investor:", error);
+        throw error;
+      }
+      console.log("Investor created successfully:", data);
       return data;
     },
     onSuccess: () => {

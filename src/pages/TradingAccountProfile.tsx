@@ -34,7 +34,7 @@ const TradingAccountProfile = () => {
   const dailyBars = pnl.map((e) => ({
     date: e.date.slice(5),
     pnl: Number(e.pnl_amount),
-    fill: Number(e.pnl_amount) >= 0 ? "hsl(160,84%,39%)" : "hsl(0,72%,51%)",
+    fill: Number(e.pnl_amount) >= 0 ? "hsl(var(--profit))" : "hsl(var(--loss))",
   }));
 
   if (accLoading || pnlLoading) {
@@ -95,12 +95,12 @@ const TradingAccountProfile = () => {
             <h3 className="mb-4 text-xs sm:text-sm font-semibold text-foreground">Equity Curve</h3>
             <ResponsiveContainer width="100%" height={220} className="sm:!h-[280px]">
               <AreaChart data={equityCurve}>
-                <defs><linearGradient id="eqGradAcc" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="hsl(160,84%,39%)" stopOpacity={0.3} /><stop offset="100%" stopColor="hsl(160,84%,39%)" stopOpacity={0} /></linearGradient></defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,14%,16%)" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(215,12%,50%)" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: "hsl(215,12%,50%)" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} width={50} />
-                <Tooltip contentStyle={{ backgroundColor: "hsl(220,18%,12%)", border: "1px solid hsl(220,14%,16%)", borderRadius: "8px", fontSize: 11, color: "hsl(210,20%,92%)" }} />
-                <Area type="monotone" dataKey="equity" stroke="hsl(160,84%,39%)" strokeWidth={2} fill="url(#eqGradAcc)" />
+                <defs><linearGradient id="eqGradAcc" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="hsl(var(--profit))" stopOpacity={0.3} /><stop offset="100%" stopColor="hsl(var(--profit))" stopOpacity={0} /></linearGradient></defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} width={50} />
+                <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: 11, color: "hsl(var(--foreground))" }} />
+                <Area type="monotone" dataKey="equity" stroke="hsl(var(--profit))" strokeWidth={2} fill="url(#eqGradAcc)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -108,10 +108,10 @@ const TradingAccountProfile = () => {
             <h3 className="mb-4 text-xs sm:text-sm font-semibold text-foreground">Daily P&L Distribution</h3>
             <ResponsiveContainer width="100%" height={180} className="sm:!h-[220px]">
               <BarChart data={dailyBars}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,14%,16%)" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(215,12%,50%)" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: "hsl(215,12%,50%)" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} width={45} />
-                <Tooltip contentStyle={{ backgroundColor: "hsl(220,18%,12%)", border: "1px solid hsl(220,14%,16%)", borderRadius: "8px", fontSize: 11, color: "hsl(210,20%,92%)" }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}K`} width={45} />
+                <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: 11, color: "hsl(var(--foreground))" }} />
                 <Bar dataKey="pnl" radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>

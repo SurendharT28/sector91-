@@ -52,7 +52,7 @@ export const useDashboardStats = () => {
       const internalCapital = totalCapital - totalInvestorCapital;
 
       // Build equity curve from P&L
-      let equity = totalAllocated > 0 ? totalAllocated : 2000000;
+      let equity = totalAllocated > 0 ? totalAllocated : 0;
       const equityCurve = pnl.map((e) => {
         equity += Number(e.pnl_amount);
         const d = new Date(e.date);

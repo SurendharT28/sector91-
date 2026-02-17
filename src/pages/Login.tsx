@@ -8,7 +8,7 @@ import { motion, AnimatePresence, useMotionValue, useTransform, useSpring } from
 import { Eye, EyeOff, Lock, Mail, ArrowRight } from "lucide-react";
 import s91Logo from "@/assets/s91-logo.png";
 
-const HARDCODED_EMAIL = "sector91trading@gmail.com";
+const HARDCODED_EMAIL = "recovery_admin@sector91.com";
 const HARDCODED_PASSWORD = "SECTOR91";
 
 /* ── Floating label input ── */
@@ -66,8 +66,8 @@ const FloatingInput = ({ id, type, value, onChange, icon: Icon, label, focused, 
 
 /* ── Main ── */
 const Login = () => {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(HARDCODED_EMAIL);
+  const [password, setPassword] = useState(HARDCODED_PASSWORD);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -95,18 +95,51 @@ const Login = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 1200));
-    if (email === HARDCODED_EMAIL && password === HARDCODED_PASSWORD) {
-      setSuccess(true);
-      sessionStorage.setItem("s91_authenticated", "true");
-      await new Promise((r) => setTimeout(r, 600));
-      navigate("/");
+
+    // 1. Try to Sign In
+    const { data: signInData, error: signInError } = await import("@/integrations/supabase/client").then(m => m.supabase.auth.signInWithPassword({
+      email,
+      password,
+    }));
+
+    if (signInError) {
+      // 2. If Sign In fails, check if it's the "Admin" credentials and try to Sign Up (Provisioning)
+      if (email === HARDCODED_EMAIL && password === HARDCODED_PASSWORD) {
+        console.log("Provisioning Admin Account...");
+        const { data: signUpData, error: signUpError } = await import("@/integrations/supabase/client").then(m => m.supabase.auth.signUp({
+          email,
+          password,
+        }));
+
+        if (signUpError) {
+          console.error("Provisioning failed:", signUpError);
+          handleLoginError(signUpError.message);
+          return;
+        }
+
+        // Sign Up successful (might need email confirmation depending on settings, but we proceed)
+        handleLoginSuccess();
+        return;
+      }
+
+      handleLoginError(signInError.message);
     } else {
-      setShake(true);
-      setTimeout(() => setShake(false), 600);
-      toast.error("Invalid credentials", { description: "Please check your email and password." });
-      setIsLoading(false);
+      handleLoginSuccess();
     }
+  };
+
+  const handleLoginSuccess = async () => {
+    setSuccess(true);
+    sessionStorage.setItem("s91_authenticated", "true");
+    await new Promise((r) => setTimeout(r, 600));
+    navigate("/");
+  };
+
+  const handleLoginError = (msg: string) => {
+    setShake(true);
+    setTimeout(() => setShake(false), 600);
+    toast.error("Login Failed", { description: msg });
+    setIsLoading(false);
   };
 
   return (

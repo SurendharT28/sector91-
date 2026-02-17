@@ -107,6 +107,7 @@ const InvestorProfile = () => {
 
   const handleAddInvestment = async () => {
     if (!invForm.amount) { toast({ title: "Amount required", variant: "destructive" }); return; }
+    if (Number(invForm.amount) <= 0) { toast({ title: "Amount must be positive", variant: "destructive" }); return; }
     await addInvestment.mutateAsync({ investor_id: investor.id, amount: Number(invForm.amount), invested_date: invForm.invested_date, notes: invForm.notes, promised_return: invForm.promised_return ? Number(invForm.promised_return) : undefined });
     logAction.mutate({ action: "Investment Added", referenceId: investor.client_id || "", module: "Investors", notes: `${fmt(Number(invForm.amount))} invested, promised ${invForm.promised_return}%` });
     toast({ title: "Investment recorded" });
@@ -135,6 +136,7 @@ const InvestorProfile = () => {
   const handleInitializeCapitalReturn = async () => {
     if (!initCapForm.amount) { toast({ title: "Amount required", variant: "destructive" }); return; }
     const capAmount = Number(initCapForm.amount);
+    if (capAmount <= 0) { toast({ title: "Amount must be positive", variant: "destructive" }); return; }
     if (capAmount > remainingCapital) {
       toast({ title: "Amount exceeds remaining capital", description: `Max returnable: ${fmt(remainingCapital)}`, variant: "destructive" });
       return;

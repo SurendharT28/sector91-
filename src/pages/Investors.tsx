@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Search, MoreHorizontal, Clock, UserCheck, UserX, Eye, CheckCircle, Pencil, Trash2 } from "lucide-react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -10,10 +13,12 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { useInvestors, useCreateInvestor, useUpdateInvestorStatus, useUpdateInvestor, useDeleteInvestor } from "@/hooks/useInvestors";
-import { useWaitingPeriodEntries, useMarkDelivered } from "@/hooks/useInvestorDetails";
+import { useWaitingPeriodEntries, useMarkDelivered, useAddWaitingPeriodEntry } from "@/hooks/useInvestorDetails";
 import { useLogAction } from "@/hooks/useAuditLog";
+import { investorSchema, waitingPeriodSchema, type InvestorFormValues, type WaitingPeriodFormValues } from "@/schemas/investorSchema";
 
 const formatCurrency = (n: number) => "₹" + n.toLocaleString("en-IN");
 const fmtLong = (d: Date) => d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
@@ -28,10 +33,11 @@ const Investors = () => {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ full_name: "", email: "", phone: "", address: "" });
   const [editOpen, setEditOpen] = useState(false);
-  const [editForm, setEditForm] = useState({ id: "", full_name: "", email: "", phone: "", address: "" });
+  const [editId, setEditId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [moveWaitingId, setMoveWaitingId] = useState<{ id: string; name: string } | null>(null);
+
   const { toast } = useToast();
   const { data: investors, isLoading } = useInvestors();
   const createInvestor = useCreateInvestor();
@@ -39,9 +45,27 @@ const Investors = () => {
   const updateInvestor = useUpdateInvestor();
   const deleteInvestor = useDeleteInvestor();
   const logAction = useLogAction();
+
   // All waiting period entries across all investors
   const { data: waitingEntries = [] } = useWaitingPeriodEntries();
   const markDelivered = useMarkDelivered();
+  const addWaitingEntry = useAddWaitingPeriodEntry();
+
+  // Forms
+  const createForm = useForm<InvestorFormValues>({
+    resolver: zodResolver(investorSchema),
+    defaultValues: { full_name: "", email: "", phone: "", address: "" },
+  });
+
+  const editForm = useForm<InvestorFormValues>({
+    resolver: zodResolver(investorSchema),
+    defaultValues: { full_name: "", email: "", phone: "", address: "" },
+  });
+
+  const waitingForm = useForm<WaitingPeriodFormValues>({
+    resolver: zodResolver(waitingPeriodSchema),
+    defaultValues: { amount: 0 },
+  });
 
   const filtered = (investors || []).filter((inv) =>
     inv.full_name.toLowerCase().includes(search.toLowerCase())
@@ -83,22 +107,48 @@ const Investors = () => {
     }
   };
 
-  const handleCreate = async () => {
-    if (!form.full_name) { toast({ title: "Name is required", variant: "destructive" }); return; }
+  const onCreateSubmit = async (data: InvestorFormValues) => {
     try {
       const result = await createInvestor.mutateAsync({
-        full_name: form.full_name,
-        email: form.email || undefined,
-        phone: form.phone || undefined,
-        address: form.address || undefined,
+        full_name: data.full_name,
+        email: data.email || undefined,
+        phone: data.phone || undefined,
+        address: data.address || undefined,
         joining_date: new Date().toISOString().split("T")[0],
       });
-      logAction.mutate({ action: "Created Investor", referenceId: result.client_id || "", module: "Investors", notes: `${form.full_name} onboarded` });
+      logAction.mutate({ action: "Created Investor", referenceId: result.client_id || "", module: "Investors", notes: `${data.full_name} onboarded` });
       toast({ title: "Investor created", description: `Client ID: ${result.client_id}` });
-      setForm({ full_name: "", email: "", phone: "", address: "" });
+      createForm.reset();
       setOpen(false);
     } catch {
       toast({ title: "Error creating investor", variant: "destructive" });
+    }
+  };
+
+  const onWaitingSubmit = async (data: WaitingPeriodFormValues) => {
+    if (!moveWaitingId) return;
+    try {
+      // 1. Create Waiting Period Entry
+      await addWaitingEntry.mutateAsync({
+        investor_id: moveWaitingId.id,
+        amount: data.amount,
+        initialized_date: new Date().toISOString(),
+      });
+      // 2. Update Status
+      await updateStatus.mutateAsync({ id: moveWaitingId.id, status: "waiting_period" });
+
+      logAction.mutate({
+        action: "Moved to Waiting Period",
+        referenceId: moveWaitingId.id,
+        module: "Investors",
+        notes: `${moveWaitingId.name} moved to Waiting Period with ₹${data.amount}`
+      });
+
+      toast({ title: "Moved to Waiting Period", description: `Added entry for ₹${data.amount}` });
+      setMoveWaitingId(null);
+      waitingForm.reset();
+    } catch {
+      toast({ title: "Error moving to waiting period", variant: "destructive" });
     }
   };
 
@@ -114,15 +164,27 @@ const Investors = () => {
   };
 
   const handleEditOpen = (inv: typeof filtered[0]) => {
-    setEditForm({ id: inv.id, full_name: inv.full_name, email: inv.email || "", phone: inv.phone || "", address: inv.address || "" });
+    setEditId(inv.id);
+    editForm.reset({
+      full_name: inv.full_name,
+      email: inv.email || "",
+      phone: inv.phone || "",
+      address: inv.address || ""
+    });
     setEditOpen(true);
   };
 
-  const handleEditSave = async () => {
-    if (!editForm.full_name) { toast({ title: "Name is required", variant: "destructive" }); return; }
+  const onEditSubmit = async (data: InvestorFormValues) => {
+    if (!editId) return;
     try {
-      await updateInvestor.mutateAsync({ id: editForm.id, full_name: editForm.full_name, email: editForm.email || undefined, phone: editForm.phone || undefined, address: editForm.address || undefined });
-      logAction.mutate({ action: "Investor Updated", referenceId: editForm.id, module: "Investors", notes: `${editForm.full_name} details updated` });
+      await updateInvestor.mutateAsync({
+        id: editId,
+        full_name: data.full_name,
+        email: data.email || undefined,
+        phone: data.phone || undefined,
+        address: data.address || undefined
+      });
+      logAction.mutate({ action: "Investor Updated", referenceId: editId, module: "Investors", notes: `${data.full_name} details updated` });
       toast({ title: "Investor updated" });
       setEditOpen(false);
     } catch {
@@ -222,7 +284,7 @@ const Investors = () => {
                                 </DropdownMenuItem>
                               )}
                               {status !== "waiting_period" && (
-                                <DropdownMenuItem onClick={() => handleStatusChange(inv.id, inv.full_name, "waiting_period")}>
+                                <DropdownMenuItem onClick={() => { setMoveWaitingId({ id: inv.id, name: inv.full_name }); waitingForm.reset(); }}>
                                   <Clock className="mr-2 h-4 w-4 text-warning" /> Move to Waiting Period
                                 </DropdownMenuItem>
                               )}
@@ -253,11 +315,6 @@ const Investors = () => {
     </div>
   );
 
-  /**
-   * Render waiting period entries table.
-   * - Pending (isDelivered=false): shows "Move to Delivered" action button and days remaining.
-   * - Delivered (isDelivered=true): shows delivered date, no actions.
-   */
   const renderWaitingEntries = (entries: typeof waitingEntries, isDelivered: boolean) => (
     <div className="glass-card overflow-hidden">
       {entries.length === 0 ? (
@@ -365,20 +422,67 @@ const Investors = () => {
           </DialogTrigger>
           <DialogContent className="sm:max-w-md max-h-[85vh] overflow-y-auto" onPointerDownOutside={(e) => e.preventDefault()}>
             <DialogHeader><DialogTitle>Add New Investor</DialogTitle></DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label>Full Name *</Label>
-                <Input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} placeholder="Enter full name" />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="grid gap-2"><Label>Email</Label><Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} type="email" placeholder="email@example.com" /></div>
-                <div className="grid gap-2"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>
-              </div>
-              <div className="grid gap-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="City, State" /></div>
-              <Button className="mt-2 w-full" onClick={handleCreate} disabled={createInvestor.isPending}>
-                {createInvestor.isPending ? "Creating..." : "Create Investor"}
-              </Button>
-            </div>
+            <Form {...createForm}>
+              <form onSubmit={createForm.handleSubmit(onCreateSubmit)} className="grid gap-4 py-4">
+                <FormField
+                  control={createForm.control}
+                  name="full_name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Full Name *</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Enter full name" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <FormField
+                    control={createForm.control}
+                    name="email"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Email</FormLabel>
+                        <FormControl>
+                          <Input type="email" placeholder="email@example.com" {...field} value={field.value || ""} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={createForm.control}
+                    name="phone"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Phone</FormLabel>
+                        <FormControl>
+                          <Input placeholder="+91 XXXXX XXXXX" {...field} value={field.value || ""} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <FormField
+                  control={createForm.control}
+                  name="address"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Address</FormLabel>
+                      <FormControl>
+                        <Input placeholder="City, State" {...field} value={field.value || ""} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <Button type="submit" className="mt-2 w-full" disabled={createInvestor.isPending}>
+                  {createInvestor.isPending ? "Creating..." : "Create Investor"}
+                </Button>
+              </form>
+            </Form>
           </DialogContent>
         </Dialog>
       </div>
@@ -388,7 +492,6 @@ const Investors = () => {
         <Input placeholder="Search investors..." className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
 
-      {/* Tabs: scrollable on mobile */}
       <Tabs defaultValue="active" className="tabs-scrollable space-y-4">
         <TabsList className="bg-muted w-full sm:w-auto">
           <TabsTrigger value="active" className="gap-1.5 text-xs sm:text-sm"><UserCheck className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Active ({activeInvestors.length})</TabsTrigger>
@@ -402,28 +505,107 @@ const Investors = () => {
         <TabsContent value="delivered">{renderWaitingEntries(deliveredEntries, true)}</TabsContent>
       </Tabs>
 
-      {/* Edit Investor Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>Edit Investor</DialogTitle></DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label>Full Name *</Label>
-              <Input value={editForm.full_name} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} placeholder="Enter full name" />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-2"><Label>Email</Label><Input value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} type="email" placeholder="email@example.com" /></div>
-              <div className="grid gap-2"><Label>Phone</Label><Input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>
-            </div>
-            <div className="grid gap-2"><Label>Address</Label><Input value={editForm.address} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} placeholder="City, State" /></div>
-            <Button className="mt-2 w-full" onClick={handleEditSave} disabled={updateInvestor.isPending}>
-              {updateInvestor.isPending ? "Saving..." : "Save Changes"}
-            </Button>
-          </div>
+          <Form {...editForm}>
+            <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="grid gap-4 py-4">
+              <FormField
+                control={editForm.control}
+                name="full_name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Full Name *</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Enter full name" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={editForm.control}
+                  name="email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Email</FormLabel>
+                      <FormControl>
+                        <Input type="email" placeholder="email@example.com" {...field} value={field.value || ""} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={editForm.control}
+                  name="phone"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Phone</FormLabel>
+                      <FormControl>
+                        <Input placeholder="+91 XXXXX XXXXX" {...field} value={field.value || ""} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={editForm.control}
+                name="address"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Address</FormLabel>
+                    <FormControl>
+                      <Input placeholder="City, State" {...field} value={field.value || ""} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <Button type="submit" className="mt-2 w-full" disabled={updateInvestor.isPending}>
+                {updateInvestor.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </form>
+          </Form>
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!moveWaitingId} onOpenChange={(open) => !open && setMoveWaitingId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Move to Waiting Period</DialogTitle></DialogHeader>
+          <Form {...waitingForm}>
+            <form onSubmit={waitingForm.handleSubmit(onWaitingSubmit)} className="grid gap-4 py-4">
+              <p className="text-sm text-muted-foreground">
+                This will change the investor's status to <strong>Waiting Period</strong> and create a tracking entry.
+                Please confirm the amount to be eventually delivered.
+              </p>
+              <FormField
+                control={waitingForm.control}
+                name="amount"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Amount</FormLabel>
+                    <FormControl>
+                      <Input type="number" placeholder="Enter amount" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <Button
+                type="submit"
+                className="mt-2 w-full"
+                disabled={updateStatus.isPending || addWaitingEntry.isPending}
+              >
+                {(updateStatus.isPending || addWaitingEntry.isPending) ? "Moving..." : "Confirm Move"}
+              </Button>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

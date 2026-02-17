@@ -109,3 +109,40 @@ export const useCreatePnLEntry = () => {
     },
   });
 };
+
+export const useDeletePnLEntry = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("daily_pnl")
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["daily_pnl"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard_stats"] });
+    },
+  });
+};
+
+export const useEditPnLEntry = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...updates }: { id: string; account_id?: string; date?: string; index_name?: string; pnl_amount?: number; capital_used?: number; notes?: string }) => {
+      const { data, error } = await supabase
+        .from("daily_pnl")
+        .update(updates)
+        .eq("id", id)
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["daily_pnl"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard_stats"] });
+    },
+  });
+};

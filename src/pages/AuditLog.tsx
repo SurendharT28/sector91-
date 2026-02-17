@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Search } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuditLog } from "@/hooks/useAuditLog";
@@ -14,9 +15,15 @@ const moduleColors: Record<string, string> = {
 
 const AuditLog = () => {
   const [search, setSearch] = useState("");
-  const { data: entries, isLoading } = useAuditLog();
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const { data: auditData, isLoading } = useAuditLog(undefined, page, pageSize);
 
-  const filtered = (entries || []).filter(
+  const entries = auditData?.data || [];
+  const totalCount = auditData?.count || 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
+
+  const filtered = entries.filter(
     (e) =>
       e.action.toLowerCase().includes(search.toLowerCase()) ||
       (e.notes || "").toLowerCase().includes(search.toLowerCase())
@@ -88,6 +95,31 @@ const AuditLog = () => {
             </div>
           </>
         )}
+      </div>
+
+      {/* Pagination Controls */}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          Showing {entries.length > 0 ? (page - 1) * pageSize + 1 : 0} to {Math.min(page * pageSize, totalCount)} of {totalCount} entries
+        </p>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1 || isLoading}
+          >
+            <ChevronLeft className="h-4 w-4" /> Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages || isLoading}
+          >
+            Next <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );

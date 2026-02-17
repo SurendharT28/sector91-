@@ -4,6 +4,7 @@ import { LayoutDashboard, Users, TrendingUp, ClipboardList, Activity, Menu, X, L
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import s91Logo from "@/assets/s91-logo.png";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -68,11 +69,10 @@ const AppSidebar = () => {
             <NavLink
               key={item.to}
               to={item.to}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all ${
-                isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              }`}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all ${isActive
+                ? "bg-primary/10 text-primary"
+                : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                }`}
             >
               <item.icon className="h-4 w-4 shrink-0" />
               {item.label}
@@ -91,9 +91,12 @@ const AppSidebar = () => {
         >
           <LogOut className="h-4 w-4" /> Logout
         </Button>
-        <div className="flex items-center gap-2 px-2">
-          <div className="h-2 w-2 rounded-full bg-profit animate-pulse-glow" />
-          <span className="text-xs text-muted-foreground">System Online</span>
+        <div className="flex items-center justify-between px-2">
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-profit animate-pulse-glow" />
+            <span className="text-xs text-muted-foreground">System Online</span>
+          </div>
+          <ThemeToggle />
         </div>
       </div>
     </>

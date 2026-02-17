@@ -21,7 +21,8 @@ const formatCurrency = (n: number | undefined | null) => "₹" + (n ?? 0).toLoca
 const Dashboard = () => {
   const { data: stats, isLoading: statsLoading } = useDashboardStats();
   const { data: totalExpenses = 0 } = useTotalExpenses();
-  const { data: auditEntries, isLoading: auditLoading } = useAuditLog(5);
+  const { data: auditData, isLoading: auditLoading } = useAuditLog(5);
+  const auditEntries = auditData?.data || [];
   const { data: accounts } = useTradingAccounts();
   const { data: pnlData } = useDailyPnL();
 
@@ -109,15 +110,15 @@ const Dashboard = () => {
             <AreaChart data={s.equityCurve}>
               <defs>
                 <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="hsl(160,84%,39%)" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="hsl(160,84%,39%)" stopOpacity={0} />
+                  <stop offset="0%" stopColor="hsl(var(--profit))" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="hsl(var(--profit))" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,14%,16%)" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(215,12%,50%)" }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: "hsl(215,12%,50%)" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} width={50} />
-              <Tooltip contentStyle={{ backgroundColor: "hsl(220,18%,12%)", border: "1px solid hsl(220,14%,16%)", borderRadius: "8px", fontSize: 11, color: "hsl(210,20%,92%)" }} formatter={(value: number) => [formatCurrency(value), "Equity"]} />
-              <Area type="monotone" dataKey="equity" stroke="hsl(160,84%,39%)" strokeWidth={2} fill="url(#eqGrad)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} width={50} />
+              <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: 11, color: "hsl(var(--foreground))" }} formatter={(value: number) => [formatCurrency(value), "Equity"]} />
+              <Area type="monotone" dataKey="equity" stroke="hsl(var(--profit))" strokeWidth={2} fill="url(#eqGrad)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
