@@ -1,0 +1,1 @@
+ALTER TABLE public.investments ADD COLUMN promised_return numeric DEFAULT 0;
