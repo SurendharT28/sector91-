@@ -4,6 +4,7 @@ import { Plus, Search, MoreHorizontal, Clock, UserCheck, UserX, Eye, CheckCircle
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +23,8 @@ import { investorSchema, waitingPeriodSchema, type InvestorFormValues, type Wait
 
 const formatCurrency = (n: number) => "₹" + n.toLocaleString("en-IN");
 const fmtLong = (d: Date) => d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+// Helper for timezone-safe date parsing
+const fmtDate = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
 const statusConfig: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
   active: { label: "Active", className: "bg-profit/15 text-profit border-profit/30", icon: <UserCheck className="h-3 w-3" /> },
@@ -67,8 +70,10 @@ const Investors = () => {
     defaultValues: { amount: 0 },
   });
 
+  // Search filter - now includes client_id
   const filtered = (investors || []).filter((inv) =>
-    inv.full_name.toLowerCase().includes(search.toLowerCase())
+    inv.full_name.toLowerCase().includes(search.toLowerCase()) ||
+    (inv.client_id || "").toLowerCase().includes(search.toLowerCase())
   );
 
   const activeInvestors = filtered.filter((inv) => inv.status === "active");
@@ -76,28 +81,43 @@ const Investors = () => {
   const inactiveInvestors = filtered.filter((inv) => inv.status === "inactive");
 
   // Separate entries: delivered = manually marked OR 60+ days old; pending = neither
+  // Filter by search term to ensure consistency across tabs
+  const filteredWaitingEntries = waitingEntries.filter(entry => {
+    const inv = (investors || []).find(i => i.id === entry.investor_id);
+    if (!inv) return false;
+    return inv.full_name.toLowerCase().includes(search.toLowerCase()) ||
+      (inv.client_id || "").toLowerCase().includes(search.toLowerCase());
+  });
+
   const now = new Date();
-  const pendingWaitingEntries = waitingEntries.filter((e) => {
+  const pendingWaitingEntries = filteredWaitingEntries.filter((e) => {
     if (e.delivered) return false;
     const diffDays = (now.getTime() - new Date(e.initialized_date).getTime()) / (1000 * 60 * 60 * 24);
     return diffDays < 60;
   });
-  const deliveredEntries = waitingEntries.filter((e) => {
+  const deliveredEntries = filteredWaitingEntries.filter((e) => {
     if (e.delivered) return true;
     const diffDays = (now.getTime() - new Date(e.initialized_date).getTime()) / (1000 * 60 * 60 * 24);
     return diffDays >= 60;
   });
 
+  // Unique investors in waiting period for proper tab count
+  const uniqueWaitingInvestors = new Set(pendingWaitingEntries.map(e => e.investor_id)).size;
+  const uniqueDeliveredInvestors = new Set(deliveredEntries.map(e => e.investor_id)).size;
+
   /**
    * Manually move a waiting period entry to Delivered Amounts.
    * Overrides the 60-day timer, updates DB immediately, logs the action.
    */
-  const handleManualDeliver = async (entryId: string, investorName: string, clientId: string, amount: number) => {
+  const handleManualDeliver = async (entryId: string, investorName: string, investorId: string, amount: number) => {
+    const inv = investors?.find(i => i.id === investorId);
+    const referenceId = inv?.client_id || "Unknown"; // Fallback to safe ID or generic
+
     try {
       await markDelivered.mutateAsync({ id: entryId });
       logAction.mutate({
         action: "Waiting Period moved to Delivered Amounts manually",
-        referenceId: clientId,
+        referenceId: referenceId,
         module: "Investors",
         notes: `${investorName}: ${formatCurrency(amount)} manually moved to Delivered Amounts`,
       });
@@ -127,19 +147,24 @@ const Investors = () => {
 
   const onWaitingSubmit = async (data: WaitingPeriodFormValues) => {
     if (!moveWaitingId) return;
+    let entryId: string | undefined;
+
     try {
       // 1. Create Waiting Period Entry
-      await addWaitingEntry.mutateAsync({
+      // Send date-only string to be consistent with other date fields and strictly typed
+      const entry = await addWaitingEntry.mutateAsync({
         investor_id: moveWaitingId.id,
         amount: data.amount,
-        initialized_date: new Date().toISOString(),
+        initialized_date: new Date().toISOString().split("T")[0],
       });
+      entryId = entry.id;
+
       // 2. Update Status
       await updateStatus.mutateAsync({ id: moveWaitingId.id, status: "waiting_period" });
 
       logAction.mutate({
         action: "Moved to Waiting Period",
-        referenceId: moveWaitingId.id,
+        referenceId: moveWaitingId.id, // Using internal ID as reference if client_id not handy here? Ideally looking up client_id
         module: "Investors",
         notes: `${moveWaitingId.name} moved to Waiting Period with ₹${data.amount}`
       });
@@ -147,12 +172,17 @@ const Investors = () => {
       toast({ title: "Moved to Waiting Period", description: `Added entry for ₹${data.amount}` });
       setMoveWaitingId(null);
       waitingForm.reset();
-    } catch {
-      toast({ title: "Error moving to waiting period", variant: "destructive" });
+    } catch (error) {
+      console.error("Failed to move to waiting period", error);
+      // Rollback: if entry was created but status update failed, delete the entry
+      if (entryId) {
+        await supabase.from("waiting_period_entries").delete().eq("id", entryId);
+      }
+      toast({ title: "Error moving to waiting period", description: "Changes rolled back.", variant: "destructive" });
     }
   };
 
-  const handleStatusChange = async (id: string, name: string, newStatus: string) => {
+  const handleStatusChange = async (id: string, name: string, newStatus: "active" | "waiting_period" | "inactive" | "exited") => {
     try {
       await updateStatus.mutateAsync({ id, status: newStatus });
       const statusLabel = statusConfig[newStatus]?.label || newStatus;
@@ -228,7 +258,7 @@ const Investors = () => {
                   <div className="flex items-center justify-between">
                     <p className="font-mono text-xs text-primary">{inv.client_id}</p>
                     <p className="text-[10px] text-muted-foreground">
-                      {inv.joining_date ? new Date(inv.joining_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                      {inv.joining_date ? fmtDate(inv.joining_date) : "—"}
                     </p>
                   </div>
                 </div>
@@ -259,7 +289,7 @@ const Investors = () => {
                         <p className="text-xs text-muted-foreground">{inv.email}</p>
                       </td>
                       <td className="px-5 py-4 text-xs text-muted-foreground">
-                        {inv.joining_date ? new Date(inv.joining_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                        {inv.joining_date ? fmtDate(inv.joining_date) : "—"}
                       </td>
                       <td className="px-5 py-4">
                         <Badge variant="outline" className={`gap-1 text-[10px] font-medium uppercase ${cfg.className}`}>
@@ -349,7 +379,7 @@ const Investors = () => {
                       variant="outline"
                       className="gap-1 text-xs w-full mt-1"
                       disabled={markDelivered.isPending}
-                      onClick={(e) => { e.stopPropagation(); handleManualDeliver(entry.id, inv?.full_name || "Unknown", inv?.client_id || "", Number(entry.amount)); }}
+                      onClick={(e) => { e.stopPropagation(); handleManualDeliver(entry.id, inv?.full_name || "Unknown", inv?.id || "", Number(entry.amount)); }}
                     >
                       <CheckCircle className="h-3 w-3" /> Move to Delivered
                     </Button>
@@ -392,7 +422,7 @@ const Investors = () => {
                             variant="outline"
                             className="gap-1 text-xs"
                             disabled={markDelivered.isPending}
-                            onClick={() => handleManualDeliver(entry.id, inv?.full_name || "Unknown", inv?.client_id || "", Number(entry.amount))}
+                            onClick={() => handleManualDeliver(entry.id, inv?.full_name || "Unknown", inv?.id || "", Number(entry.amount))}
                           >
                             <CheckCircle className="h-3 w-3" /> Move to Delivered
                           </Button>
@@ -495,9 +525,9 @@ const Investors = () => {
       <Tabs defaultValue="active" className="tabs-scrollable space-y-4">
         <TabsList className="bg-muted w-full sm:w-auto">
           <TabsTrigger value="active" className="gap-1.5 text-xs sm:text-sm"><UserCheck className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Active ({activeInvestors.length})</TabsTrigger>
-          <TabsTrigger value="waiting" className="gap-1.5 text-xs sm:text-sm"><Clock className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Waiting ({pendingWaitingEntries.length})</TabsTrigger>
+          <TabsTrigger value="waiting" className="gap-1.5 text-xs sm:text-sm"><Clock className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Waiting ({uniqueWaitingInvestors})</TabsTrigger>
           <TabsTrigger value="inactive" className="gap-1.5 text-xs sm:text-sm"><UserX className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Inactive ({inactiveInvestors.length})</TabsTrigger>
-          <TabsTrigger value="delivered" className="gap-1.5 text-xs sm:text-sm"><CheckCircle className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Delivered ({deliveredEntries.length})</TabsTrigger>
+          <TabsTrigger value="delivered" className="gap-1.5 text-xs sm:text-sm"><CheckCircle className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Delivered ({uniqueDeliveredInvestors})</TabsTrigger>
         </TabsList>
         <TabsContent value="active">{renderTable(activeInvestors)}</TabsContent>
         <TabsContent value="waiting">{renderWaitingEntries(pendingWaitingEntries, false)}</TabsContent>

@@ -1,19 +1,20 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Plus, CalendarIcon, Pencil, Trash2, MoreVertical, X } from "lucide-react";
+import { Plus, CalendarIcon, Pencil, Trash2, MoreVertical, Search, CheckCircle, PauseCircle, AlertTriangle, XCircle } from "lucide-react";
 import { format } from "date-fns";
+import { useNavigate } from "react-router-dom";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -36,9 +37,15 @@ import { tradingAccountSchema, pnlSchema, type TradingAccountFormValues, type Pn
 const formatCurrency = (val: number) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(val);
 
+const statusConfig: Record<string, { className: string; icon: React.ReactNode }> = {
+  active: { className: "bg-emerald-500/15 text-emerald-500 border-emerald-500/30", icon: <CheckCircle className="h-3 w-3" /> },
+  paused: { className: "bg-yellow-500/15 text-yellow-500 border-yellow-500/30", icon: <PauseCircle className="h-3 w-3" /> },
+  closed: { className: "bg-destructive/15 text-destructive border-destructive/30", icon: <XCircle className="h-3 w-3" /> },
+};
+
 const Trading = () => {
-  const navigate = useNavigate();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   // Data Hooks
   const { data: accounts, isLoading: accountsLoading } = useTradingAccounts();
@@ -53,16 +60,17 @@ const Trading = () => {
   const logAction = useLogAction();
 
   // State
+  const [activeTab, setActiveTab] = useState("accounts");
   const [selectedAccount, setSelectedAccount] = useState<string>("all");
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const [pnlDialogOpen, setPnlDialogOpen] = useState(false);
-  const [editingPnl, setEditingPnl] = useState<any>(null); // For PnL Edit Mode
-  const [editingAccount, setEditingAccount] = useState<any>(null); // For Account Edit Mode
+  const [editingPnl, setEditingPnl] = useState<any>(null);
+  const [editingAccount, setEditingAccount] = useState<any>(null);
 
   // Forms
   const accountForm = useForm<TradingAccountFormValues>({
     resolver: zodResolver(tradingAccountSchema),
-    defaultValues: { name: "", broker: "", capital_allocated: 0 },
+    defaultValues: { name: "", broker: "", capital_allocated: 0, status: "active" },
   });
 
   const pnlForm = useForm<PnLFormValues>({
@@ -89,14 +97,58 @@ const Trading = () => {
     ? (filteredPnL.filter((p) => Number(p.pnl_amount) > 0).length / filteredPnL.length) * 100
     : 0;
 
-  // Chart Data preparation
-  const chartData = [...filteredPnL]
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-    .map(p => ({
-      date: format(new Date(p.date), "dd MMM"),
-      pnl: Number(p.pnl_amount),
-      capital: Number(p.capital_used),
-    }));
+  // Calculate unique trading days for accurate average
+  const uniqueDays = new Set(filteredPnL.map(p => p.date)).size;
+  const avgDailyPnL = uniqueDays > 0 ? totalPnL / uniqueDays : 0;
+
+  // Helper to safely parse YYYY-MM-DD to local Date
+  const parseDateLocal = (dateStr: string) => {
+    if (!dateStr) return new Date();
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+
+  // Chart Data preparation (Aggregated by Date)
+  // First, aggregate per day
+  const dailyAggregated = Object.values(
+    filteredPnL.reduce((acc: any, p) => {
+      const dateStr = String(p.date);
+      if (!acc[dateStr]) {
+        acc[dateStr] = {
+          dateStr,
+          dateObj: parseDateLocal(dateStr),
+          pnl: 0,
+          capital: 0,
+        };
+      }
+      acc[dateStr].pnl += Number(p.pnl_amount);
+      acc[dateStr].capital += Number(p.capital_used);
+      return acc;
+    }, {})
+  ).sort((a: any, b: any) => a.dateObj.getTime() - b.dateObj.getTime());
+
+  // Then calculate cumulative equity
+  let runningEquity = 0;
+  const chartData = dailyAggregated.map((item: any) => {
+    runningEquity += item.pnl;
+    return {
+      date: format(item.dateObj, "dd MMM"),
+      pnl: item.pnl,
+      equity: runningEquity,
+      capital: item.capital,
+    };
+  });
+
+  // Default PnL reset helper — includes custom_index to avoid stale value
+  const getDefaultPnLValues = (accountId?: string): PnLFormValues => ({
+    account_id: accountId && accountId !== "all" ? accountId : "",
+    date: new Date(),
+    index_name: "NIFTY",
+    custom_index: "",
+    pnl_amount: 0,
+    capital_used: 0,
+    notes: "",
+  });
 
   // Handlers
   const onAccountSubmit = async (data: TradingAccountFormValues) => {
@@ -120,37 +172,40 @@ const Trading = () => {
 
   const onPnLSubmit = async (data: PnLFormValues) => {
     try {
-      // Ensure date is in local YYYY-MM-DD format to avoid UTC shifts
       const formattedDate = format(data.date, "yyyy-MM-dd");
 
+      // Handle custom index logic
+      const finalIndexName = data.index_name === "OTHER" && data.custom_index
+        ? data.custom_index
+        : data.index_name;
+
+      // Create payload matching DB schema (exclude custom_index)
       const payload = {
-        ...data,
+        account_id: data.account_id,
         date: formattedDate,
+        index_name: finalIndexName,
+        pnl_amount: data.pnl_amount,
+        capital_used: data.capital_used,
+        notes: data.notes
       };
 
       if (editingPnl) {
         await updatePnL.mutateAsync({ id: editingPnl.id, ...payload });
-        logAction.mutate({ action: "Updated PnL Log", referenceId: editingPnl.id, module: "Trading", notes: `${data.date.toDateString()} PnL updated` });
+        logAction.mutate({ action: "Updated PnL Log", referenceId: editingPnl.id, module: "Trading", notes: `${formattedDate} PnL updated` });
         toast({ title: "PnL entry updated" });
       } else {
         const res = await addPnL.mutateAsync(payload);
-        logAction.mutate({ action: "Added PnL Log", referenceId: res.id, module: "Trading", notes: `${data.date.toDateString()} PnL added` });
+        logAction.mutate({ action: "Added PnL Log", referenceId: res.id, module: "Trading", notes: `${formattedDate} PnL added` });
         toast({ title: "PnL entry added" });
       }
       setPnlDialogOpen(false);
       setEditingPnl(null);
-      pnlForm.reset({
-        account_id: selectedAccount === "all" ? "" : selectedAccount,
-        date: new Date(),
-        index_name: "NIFTY",
-        pnl_amount: 0,
-        capital_used: 0,
-        notes: "",
-      });
+      pnlForm.reset(getDefaultPnLValues(selectedAccount));
     } catch {
       toast({ title: "Error saving PnL", variant: "destructive" });
     }
   };
+
 
   const handleDeletePnL = async (id: string, date: string) => {
     try {
@@ -163,8 +218,18 @@ const Trading = () => {
   };
 
   const handleDeleteAccount = async (id: string, name: string) => {
-    // Basic check, ideally checking if PnL exists
-    if (confirm(`Are you sure you want to delete ${name}? This will delete all associated PnL data.`)) {
+    // Check if account has any PnL entries (using global pnlData to ensure safety)
+    const associatedPnL = (pnlData || []).filter((p) => p.account_id === id);
+    const count = associatedPnL.length;
+
+    let message = `Are you sure you want to delete ${name}?`;
+    if (count > 0) {
+      message += `\n\nWARNING: This account has ${count} PnL entries. Deleting it will PERMANENTLY DELETE all these entries as well.`;
+    } else {
+      message += `\n\nThis action cannot be undone.`;
+    }
+
+    if (confirm(message)) {
       try {
         await deleteAccount.mutateAsync(id);
         logAction.mutate({ action: "Deleted Trading Account", referenceId: id, module: "Trading", notes: `Deleted account ${name}` });
@@ -180,7 +245,7 @@ const Trading = () => {
     setEditingPnl(pnl);
     pnlForm.reset({
       account_id: pnl.account_id,
-      date: new Date(pnl.date),
+      date: parseDateLocal(String(pnl.date)),
       index_name: pnl.index_name,
       custom_index: pnl.custom_index || "",
       pnl_amount: Number(pnl.pnl_amount),
@@ -196,167 +261,370 @@ const Trading = () => {
       name: acc.name,
       broker: acc.broker || "",
       capital_allocated: Number(acc.capital_allocated),
+      status: acc.status || "active",
     });
     setAccountDialogOpen(true);
   };
 
+  // Calculate total P&L for accounts display
+  const getAccountPnL = (accountId: string) => {
+    return (pnlData || [])
+      .filter((p) => p.account_id === accountId)
+      .reduce((sum, p) => sum + Number(p.pnl_amount), 0);
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Trading Journal</h1>
-          <p className="text-muted-foreground">Track daily performance</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Select value={selectedAccount} onValueChange={setSelectedAccount}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Select Account" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Accounts</SelectItem>
-              {accounts?.map((acc) => (
-                <SelectItem key={acc.id} value={acc.id}>
-                  {acc.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button onClick={() => { setAccountDialogOpen(true); setEditingAccount(null); accountForm.reset(); }}>
-            <Plus className="h-4 w-4 mr-2" /> Account
+    <div className="space-y-6 container mx-auto p-6 max-w-7xl">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-3xl font-bold tracking-tight">Trading</h1>
+        <p className="text-muted-foreground">Accounts, P&L tracking & analytics</p>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <div className="flex items-center justify-between mb-8">
+          <TabsList className="bg-muted/50 p-1">
+            <TabsTrigger value="accounts" className="px-6 data-[state=active]:bg-background">Accounts</TabsTrigger>
+            <TabsTrigger value="pnl" className="px-6 data-[state=active]:bg-background">Daily P&L</TabsTrigger>
+            <TabsTrigger value="analytics" className="px-6 data-[state=active]:bg-background">Analytics</TabsTrigger>
+          </TabsList>
+
+          {/* Global Add PnL Button accessible from anywhere */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="hidden sm:flex"
+            onClick={() => {
+              setEditingPnl(null);
+              pnlForm.reset(getDefaultPnLValues(selectedAccount));
+              setPnlDialogOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" /> Quick Add P&L
           </Button>
-          <Button onClick={() => { setPnlDialogOpen(true); setEditingPnl(null); pnlForm.reset({ account_id: selectedAccount === "all" ? "" : selectedAccount, date: new Date(), index_name: "NIFTY", pnl_amount: 0, capital_used: 0, notes: "" }); }}>
-            <Plus className="h-4 w-4 mr-2" /> Entry
+        </div>
+
+        {/* ACCOUNTS TAB */}
+        <TabsContent value="accounts" className="space-y-6">
+          <Button
+            onClick={() => {
+              setEditingAccount(null);
+              accountForm.reset();
+              setAccountDialogOpen(true);
+            }}
+            className="bg-yellow-500 hover:bg-yellow-600 text-black font-medium"
+          >
+            <Plus className="h-4 w-4 mr-2" /> Add Account
           </Button>
-        </div>
-      </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <div className="glass-card p-4">
-          <p className="text-sm font-medium text-muted-foreground">Total P&L</p>
-          <div className={`text-2xl font-bold ${totalPnL >= 0 ? "text-profit" : "text-loss"}`}>
-            {formatCurrency(totalPnL)}
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {accountsLoading ? (
+              Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-[200px] w-full rounded-xl" />
+              ))
+            ) : accounts?.map((acc) => {
+              const accPnL = getAccountPnL(acc.id);
+              const isProfit = accPnL >= 0;
+              const status = acc.status || "active";
+              const statusCfg = statusConfig[status] || statusConfig.active;
+
+              return (
+                <div
+                  key={acc.id}
+                  className="group relative overflow-hidden rounded-xl border bg-card text-card-foreground shadow transition-all hover:shadow-md cursor-pointer hover:border-primary/50"
+                  onClick={() => navigate(`/trading/${acc.id}`)}
+                >
+                  <div className="p-6 space-y-4">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className="font-bold text-xl uppercase tracking-wide">{acc.name}</h3>
+                        <p className="text-sm text-muted-foreground mt-1">Broker: {acc.broker || "N/A"}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className={`gap-1 text-[10px] font-medium uppercase ${statusCfg.className}`}>
+                          {statusCfg.icon} {status}
+                        </Badge>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                            <Button variant="ghost" className="h-8 w-8 p-0">
+                              <span className="sr-only">Open menu</span>
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEditAccount(acc); }}>
+                              <Pencil className="mr-2 h-4 w-4" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDeleteAccount(acc.id, acc.name); }} className="text-destructive">
+                              <Trash2 className="mr-2 h-4 w-4" /> Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-2xl font-bold text-foreground">
+                        {formatCurrency(Number(acc.capital_allocated) + accPnL)}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <span className={isProfit ? "text-emerald-500" : "text-red-500"}>
+                        {accPnL > 0 ? "+" : ""}{formatCurrency(accPnL)} P&L
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </div>
-        <div className="glass-card p-4">
-          <p className="text-sm font-medium text-muted-foreground">Win Rate</p>
-          <div className="text-2xl font-bold">{winRate.toFixed(1)}%</div>
-        </div>
-        <div className="glass-card p-4">
-          <p className="text-sm font-medium text-muted-foreground">Trades</p>
-          <div className="text-2xl font-bold">{filteredPnL.length}</div>
-        </div>
-        <div className="glass-card p-4">
-          <p className="text-sm font-medium text-muted-foreground">Account Capital</p>
-          <div className="text-2xl font-bold">
-            {selectedAccount === "all"
-              ? formatCurrency(accounts?.reduce((sum, acc) => sum + Number(acc.capital_allocated), 0) || 0)
-              : formatCurrency(Number(accounts?.find(a => a.id === selectedAccount)?.capital_allocated || 0))
-            }
+        </TabsContent>
+
+        {/* DAILY P&L TAB */}
+        <TabsContent value="pnl" className="space-y-6">
+          <div className="flex items-center justify-between">
+            <Button
+              onClick={() => {
+                setEditingPnl(null);
+                pnlForm.reset(getDefaultPnLValues(selectedAccount));
+                setPnlDialogOpen(true);
+              }}
+              className="bg-yellow-500 hover:bg-yellow-600 text-black font-medium"
+            >
+              <Plus className="h-4 w-4 mr-2" /> Add P&L Entry
+            </Button>
+
+            <Select value={selectedAccount} onValueChange={setSelectedAccount}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Filter by Account" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Accounts</SelectItem>
+                {accounts?.map((acc) => (
+                  <SelectItem key={acc.id} value={acc.id}>
+                    {acc.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        </div>
-      </div>
 
-      {/* Charts */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="glass-card p-6 h-[300px]">
-          <h3 className="text-lg font-semibold mb-4">P&L Curve</h3>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData}>
-              <defs>
-                <linearGradient id="colorPnL" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.1} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-              <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `${value / 1000}k`} />
-              <Tooltip
-                contentStyle={{ backgroundColor: "hsl(var(--card))", borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
-                itemStyle={{ color: "hsl(var(--foreground))" }}
-              />
-              <Area type="monotone" dataKey="pnl" stroke="#10b981" fillOpacity={1} fill="url(#colorPnL)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="glass-card p-6 h-[300px]">
-          <h3 className="text-lg font-semibold mb-4">Capital Usage</h3>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-              <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `${value / 1000}k`} />
-              <Tooltip
-                contentStyle={{ backgroundColor: "hsl(var(--card))", borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
-                itemStyle={{ color: "hsl(var(--foreground))" }}
-              />
-              <Bar dataKey="capital" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+          <div className="rounded-md border bg-card">
+            <div className="grid grid-cols-12 gap-4 p-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b">
+              <div className="col-span-2">Date</div>
+              <div className="col-span-2">Account</div>
+              <div className="col-span-1 text-center">Index</div>
+              <div className="col-span-2 text-right">P&L</div>
+              <div className="col-span-1 text-center">ROI</div>
+              <div className="col-span-3 text-right">Capital</div>
+              <div className="col-span-1 text-right">Actions</div>
+            </div>
 
-      {/* Recent Activity Table */}
-      <div className="glass-card overflow-hidden">
-        <div className="p-4 border-b border-border/50">
-          <h3 className="font-semibold">Recent Activity</h3>
-        </div>
-        <div className="table-responsive">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-border text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                <th className="px-5 py-3">Date</th>
-                <th className="px-5 py-3">Account</th>
-                <th className="px-5 py-3">Instrument</th>
-                <th className="px-5 py-3 text-right">Capital</th>
-                <th className="px-5 py-3 text-right">P&L</th>
-                <th className="px-5 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredPnL.map((pnl) => {
-                const isProfit = Number(pnl.pnl_amount) >= 0;
-                const accountName = accounts?.find(a => a.id === pnl.account_id)?.name || "Unknown";
-                return (
-                  <tr key={pnl.id} className="border-b border-border/50 hover:bg-muted/30">
-                    <td className="px-5 py-4 text-sm">{format(new Date(pnl.date), "dd MMM yyyy")}</td>
-                    <td className="px-5 py-4 text-sm">{accountName}</td>
-                    <td className="px-5 py-4">
-                      <Badge variant="outline">{pnl.index_name}</Badge>
-                    </td>
-                    <td className="px-5 py-4 text-sm text-right font-mono">{formatCurrency(Number(pnl.capital_used))}</td>
-                    <td className={`px-5 py-4 text-sm text-right font-bold ${isProfit ? "text-profit" : "text-loss"}`}>
-                      {formatCurrency(Number(pnl.pnl_amount))}
-                    </td>
-                    <td className="px-5 py-4 text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" className="h-8 w-8 p-0">
-                            <span className="sr-only">Open menu</span>
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEditPnl(pnl)}>
-                            <Pencil className="mr-2 h-4 w-4" /> Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleDeletePnL(pnl.id, pnl.date)} className="text-destructive">
-                            <Trash2 className="mr-2 h-4 w-4" /> Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            <div className="divide-y divide-border/50">
+              {pnlLoading ? (
+                <div className="p-8 text-center text-muted-foreground">Loading entries...</div>
+              ) : filteredPnL.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground">
+                  No entries found. Start by adding a new P&L entry.
+                </div>
+              ) : (
+                filteredPnL.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((pnl) => {
+                  const isProfit = Number(pnl.pnl_amount) >= 0;
+                  const roi = Number(pnl.capital_used) > 0
+                    ? (Number(pnl.pnl_amount) / Number(pnl.capital_used)) * 100
+                    : 0;
+
+                  // Find account name
+                  const accountName = accounts?.find(a => a.id === pnl.account_id)?.name || "Unknown";
+
+                  return (
+                    <div key={pnl.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-muted/30 transition-colors text-sm">
+                      <div className="col-span-2 font-mono text-muted-foreground">
+                        {format(parseDateLocal(String(pnl.date)), "yyyy-MM-dd")}
+                      </div>
+                      <div className="col-span-2 font-medium truncate" title={accountName}>
+                        {accountName}
+                      </div>
+                      <div className="col-span-1 text-center">
+                        <Badge variant="secondary" className="font-mono text-[10px] px-1">{pnl.index_name}</Badge>
+                      </div>
+                      <div className={`col-span-2 text-right font-bold font-mono ${isProfit ? "text-emerald-500" : "text-red-500"}`}>
+                        {Number(pnl.pnl_amount) > 0 ? "+" : ""}{formatCurrency(Number(pnl.pnl_amount))}
+                      </div>
+                      <div className={`col-span-1 text-center font-mono text-xs ${roi >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                        {roi > 0 ? "+" : ""}{roi.toFixed(1)}%
+                      </div>
+                      <div className="col-span-3 text-right font-mono text-muted-foreground">
+                        {formatCurrency(Number(pnl.capital_used))}
+                      </div>
+                      <div className="col-span-1 text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" className="h-8 w-8 p-0">
+                              <span className="sr-only">Open menu</span>
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => openEditPnl(pnl)}>
+                              <Pencil className="mr-2 h-4 w-4" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleDeletePnL(pnl.id, String(pnl.date))} className="text-destructive">
+                              <Trash2 className="mr-2 h-4 w-4" /> Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* ANALYTICS TAB */}
+        <TabsContent value="analytics" className="space-y-6">
+          {/* Stats Cards */}
+          <div className="grid gap-4 md:grid-cols-4">
+            <div className="rounded-xl border bg-card p-6 shadow-sm">
+              <p className="text-sm font-medium text-muted-foreground mb-2">Net Profit</p>
+              {pnlLoading ? (
+                <Skeleton className="h-8 w-24" />
+              ) : (
+                <div className={`text-3xl font-bold ${totalPnL >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                  {formatCurrency(totalPnL)}
+                </div>
+              )}
+            </div>
+            <div className="rounded-xl border bg-card p-6 shadow-sm">
+              <p className="text-sm font-medium text-muted-foreground mb-2">Win Rate</p>
+              {pnlLoading ? (
+                <Skeleton className="h-8 w-16" />
+              ) : (
+                <div className="text-3xl font-bold text-foreground">{winRate.toFixed(1)}%</div>
+              )}
+            </div>
+            <div className="rounded-xl border bg-card p-6 shadow-sm">
+              <p className="text-sm font-medium text-muted-foreground mb-2">Total Trades</p>
+              {pnlLoading ? (
+                <Skeleton className="h-8 w-12" />
+              ) : (
+                <div className="text-3xl font-bold text-foreground">{filteredPnL.length}</div>
+              )}
+            </div>
+            <div className="rounded-xl border bg-card p-6 shadow-sm">
+              <p className="text-sm font-medium text-muted-foreground mb-2">Avg Daily P&L</p>
+              {pnlLoading ? (
+                <Skeleton className="h-8 w-24" />
+              ) : (
+                <div className={`text-3xl font-bold ${avgDailyPnL >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                  {formatCurrency(avgDailyPnL)}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Charts */}
+          <div className="grid gap-6">
+            {/* Equity Curve */}
+            <div className="rounded-xl border bg-card p-6">
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold">Equity Curve</h3>
+                <p className="text-sm text-muted-foreground">Cumulative P&L over time</p>
+              </div>
+              <div className="h-[400px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="colorPnL" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" opacity={0.4} />
+                    <XAxis
+                      dataKey="date"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      dy={10}
+                    />
+                    <YAxis
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(value) => `${value / 1000}k`}
+                      dx={-10}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--background))",
+                        borderColor: "hsl(var(--border))",
+                        borderRadius: "8px",
+                      }}
+                      itemStyle={{ color: "hsl(var(--foreground))" }}
+                      formatter={(value: any) => [formatCurrency(value), "Cumulative Equity"]}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="equity"
+                      stroke="#10b981"
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorPnL)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Capital Usage */}
+            <div className="rounded-xl border bg-card p-6">
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold">Capital Usage</h3>
+              </div>
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" opacity={0.4} />
+                    <XAxis
+                      dataKey="date"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      dy={10}
+                    />
+                    <YAxis
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(value) => `${value / 1000}k`}
+                      dx={-10}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--background))",
+                        borderColor: "hsl(var(--border))",
+                        borderRadius: "8px",
+                      }}
+                      itemStyle={{ color: "hsl(var(--foreground))" }}
+                    />
+                    <Bar dataKey="capital" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
 
       {/* Account Dialog */}
-      <Dialog open={accountDialogOpen} onOpenChange={setAccountDialogOpen}>
+      <Dialog open={accountDialogOpen} onOpenChange={(open) => { setAccountDialogOpen(open); if (!open) { setEditingAccount(null); accountForm.reset(); } }}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>{editingAccount ? "Edit Account" : "Add Trading Account"}</DialogTitle>
@@ -402,6 +670,28 @@ const Trading = () => {
                   </FormItem>
                 )}
               />
+              <FormField
+                control={accountForm.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Status</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="paused">Paused</SelectItem>
+                        <SelectItem value="closed">Closed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <Button type="submit" className="w-full" disabled={createAccount.isPending || updateAccount.isPending}>
                 {editingAccount ? "Update Account" : "Create Account"}
               </Button>
@@ -411,7 +701,7 @@ const Trading = () => {
       </Dialog>
 
       {/* PnL Dialog */}
-      <Dialog open={pnlDialogOpen} onOpenChange={setPnlDialogOpen}>
+      <Dialog open={pnlDialogOpen} onOpenChange={(open) => { setPnlDialogOpen(open); if (!open) { setEditingPnl(null); pnlForm.reset(getDefaultPnLValues(selectedAccount)); } }}>
         <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingPnl ? "Edit Entry" : "Add P&L Entry"}</DialogTitle>
@@ -424,7 +714,7 @@ const Trading = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Account</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Select account" />
@@ -457,7 +747,13 @@ const Trading = () => {
                         </FormControl>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="single" selected={field.value} onSelect={field.onChange} disabled={(date) => date > new Date() || date < new Date("1900-01-01")} initialFocus />
+                        <Calendar
+                          mode="single"
+                          selected={field.value}
+                          onSelect={field.onChange}
+                          disabled={(date) => date > new Date() || date < new Date("1900-01-01")}
+                          initialFocus
+                        />
                       </PopoverContent>
                     </Popover>
                     <FormMessage />
@@ -472,7 +768,7 @@ const Trading = () => {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Index</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select index" />
@@ -500,7 +796,11 @@ const Trading = () => {
                     <FormItem>
                       <FormLabel>Custom Name</FormLabel>
                       <FormControl>
-                        <Input placeholder="If Other..." {...field} disabled={pnlForm.watch("index_name") !== "OTHER"} />
+                        <Input
+                          placeholder="If Other..."
+                          {...field}
+                          disabled={pnlForm.watch("index_name") !== "OTHER"}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

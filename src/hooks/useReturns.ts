@@ -3,7 +3,9 @@ import { supabase } from "@/integrations/supabase/client";
 
 export const useMonthlyReturns = () => {
   return useQuery({
-    queryKey: ["monthly_returns"],
+    // 1. Updated query key to be consistent with useInvestorDetails but distinguishable
+    // "monthly_returns" (prefix) will invalidation both ["monthly_returns"] and ["monthly_returns", investorId]
+    queryKey: ["monthly_returns", "all"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("monthly_returns")
@@ -18,15 +20,37 @@ export const useMonthlyReturns = () => {
 export const useUpdateReturnStatus = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const { error } = await supabase
+    // 2. Validate status literals
+    mutationFn: async ({ id, status }: { id: string; status: "pending" | "paid" | "overdue" }) => {
+      const updateData: any = { status };
+
+      // 4. Set paid_at timestamp
+      if (status === "paid") {
+        // ideally use server timestamp
+        updateData.paid_at = new Date().toISOString();
+      }
+
+      // 3. Return updated data
+      const { data, error } = await supabase
         .from("monthly_returns")
-        .update({ status })
-        .eq("id", id);
+        .update(updateData)
+        .eq("id", id)
+        .select()
+        .single();
       if (error) throw error;
+      return data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // 5. Cross-hook invalidations
+      // Invalidate the global list
       queryClient.invalidateQueries({ queryKey: ["monthly_returns"] });
+
+      // Invalidate the specific investor's list if we have the ID
+      if (data?.investor_id) {
+        queryClient.invalidateQueries({ queryKey: ["monthly_returns", data.investor_id] });
+        queryClient.invalidateQueries({ queryKey: ["investors"] });
+      }
+
       queryClient.invalidateQueries({ queryKey: ["dashboard_stats"] });
     },
   });

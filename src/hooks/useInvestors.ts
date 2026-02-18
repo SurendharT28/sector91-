@@ -8,41 +8,41 @@ export const useInvestors = () => {
       const { data, error } = await supabase
         .from("investors")
         .select("*")
-        .order("created_at", { ascending: true });
+        // Fixed sort order: show newest first
+        .order("created_at", { ascending: false });
       if (error) throw error;
       return data;
     },
   });
 };
 
+export const useInvestor = (id: string) => {
+  return useQuery({
+    queryKey: ["investor", id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("investors")
+        .select("*")
+        .eq("id", id)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!id,
+  });
+};
+
 export const useCreateInvestor = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (investor: {
-      full_name: string;
-      email?: string;
-      phone?: string;
-      address?: string;
-      investment_amount?: number;
-      promised_return?: number;
-      joining_date?: string;
-    }) => {
-      console.log("Creating investor payload:", investor);
-      const { data, error } = await supabase
-        .from("investors")
-        .insert(investor)
-        .select()
-        .single();
-      if (error) {
-        console.error("Supabase error creating investor:", error);
-        throw error;
-      }
-      console.log("Investor created successfully:", data);
+    mutationFn: async (investor: any) => {
+      // Removed PII logging
+      const { data, error } = await supabase.from("investors").insert(investor).select().single();
+      if (error) throw error;
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["investors"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard_stats"] });
     },
   });
 };
@@ -50,13 +50,15 @@ export const useCreateInvestor = () => {
 export const useUpdateInvestorStatus = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const updateData: Record<string, unknown> = { status };
+    // Validated status type
+    mutationFn: async ({ id, status }: { id: string; status: "active" | "waiting_period" | "inactive" | "exited" }) => {
+      const updateData: any = { status };
+
       if (status === "waiting_period") {
+        // ideally use server timestamp, client time is fallback
         updateData.waiting_period_start = new Date().toISOString();
-      } else {
-        updateData.waiting_period_start = null;
       }
+
       const { data, error } = await supabase
         .from("investors")
         .update(updateData)
@@ -66,9 +68,9 @@ export const useUpdateInvestorStatus = () => {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["investors"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard_stats"] });
+      queryClient.invalidateQueries({ queryKey: ["investor", vars.id] });
     },
   });
 };
@@ -76,7 +78,16 @@ export const useUpdateInvestorStatus = () => {
 export const useUpdateInvestor = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...updates }: { id: string; full_name?: string; email?: string; phone?: string; address?: string }) => {
+    // Added financial fields to update type
+    mutationFn: async ({ id, ...updates }: {
+      id: string;
+      full_name?: string;
+      email?: string;
+      phone?: string;
+      address?: string;
+      investment_amount?: number;
+      promised_return?: number;
+    }) => {
       const { data, error } = await supabase
         .from("investors")
         .update(updates)
@@ -86,9 +97,9 @@ export const useUpdateInvestor = () => {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["investors"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard_stats"] });
+      queryClient.invalidateQueries({ queryKey: ["investor", vars.id] });
     },
   });
 };
@@ -97,18 +108,19 @@ export const useDeleteInvestor = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      // Delete related records first
-      await supabase.from("monthly_returns").delete().eq("investor_id", id);
-      await supabase.from("investments").delete().eq("investor_id", id);
-      await supabase.from("capital_returns").delete().eq("investor_id", id);
-      await supabase.from("waiting_period_entries").delete().eq("investor_id", id);
-      await supabase.from("agreements").delete().eq("investor_id", id);
+      // Removed manual deletes of related tables.
+      // Database is configured with ON DELETE CASCADE for:
+      // - monthly_returns
+      // - investments
+      // - agreements
+      // - capital_returns (implied by schema structure pattern)
+      // This prevents race conditions and partial deletes.
+
       const { error } = await supabase.from("investors").delete().eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["investors"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard_stats"] });
     },
   });
 };

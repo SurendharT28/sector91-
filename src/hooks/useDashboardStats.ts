@@ -30,7 +30,6 @@ export const useDashboardStats = () => {
 
       const totalAllocated = accounts.reduce((s, a) => s + Number(a.capital_allocated), 0);
       const totalPnL = pnl.reduce((s, e) => s + Number(e.pnl_amount), 0);
-      const totalCapital = totalAllocated + totalPnL;
       const netProfit = totalPnL;
       const wins = pnl.filter((e) => Number(e.pnl_amount) > 0).length;
       const winRate = pnl.length > 0 ? parseFloat(((wins / pnl.length) * 100).toFixed(1)) : 0;
@@ -38,9 +37,9 @@ export const useDashboardStats = () => {
         .filter((r) => r.status === "pending")
         .reduce((s, r) => s + Number(r.amount), 0);
 
-      // Total Investor Capital = sum of (invested - delivered capital returns) per investor
-      const now = new Date();
       const totalInvested = allInvestments.reduce((s, i) => s + Number(i.amount), 0);
+      const now = new Date();
+      // Calculate total delivered capital (returned to investors)
       const totalDelivered = allWaiting
         .filter((e) => {
           if (e.delivered) return true;
@@ -48,26 +47,45 @@ export const useDashboardStats = () => {
           return diffDays >= 60;
         })
         .reduce((s, e) => s + Number(e.amount), 0);
+
+      // Total Capital = (Allocated - Delivered) + PnL
+      // Accounts for capital leaving the system when investors are paid out
+      const activeAllocated = Math.max(0, totalAllocated - totalDelivered);
+      const totalCapital = activeAllocated + totalPnL;
+
       const totalInvestorCapital = totalInvested - totalDelivered;
-      const internalCapital = totalCapital - totalInvestorCapital;
+      // Internal Capital = Total Capital - Investor Capital (floored at 0)
+      const internalCapital = Math.max(0, totalCapital - totalInvestorCapital);
 
       // Build equity curve from P&L
-      let equity = totalAllocated > 0 ? totalAllocated : 0;
+      // Baseline starts from active allocated capital
+      let equity = activeAllocated;
       const equityCurve = pnl.map((e) => {
         equity += Number(e.pnl_amount);
-        const d = new Date(e.date);
+        // Correct date parsing for local timezone (YYYY-MM-DD -> Date)
+        const [y, m, d] = String(e.date).split("-").map(Number);
+        const dateObj = new Date(y, m - 1, d);
         return {
-          date: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+          date: dateObj.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
           equity,
         };
       });
 
-      const startEquity = equityCurve.length > 0 ? equityCurve[0].equity - Number(pnl[0].pnl_amount) : totalCapital;
+      const startEquity = equityCurve.length > 0 ? equityCurve[0].equity - Number(pnl[0].pnl_amount) : activeAllocated;
       const endEquity = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].equity : startEquity;
       const equityGrowth = startEquity > 0 ? parseFloat((((endEquity - startEquity) / startEquity) * 100).toFixed(1)) : 0;
 
+      // Calculate new investors this month
+      const currentMonth = new Date().getMonth();
+      const currentYear = new Date().getFullYear();
+      const newInvestorsCount = investors.filter(i => {
+        const d = new Date(i.created_at);
+        return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+      }).length;
+
       return {
         totalInvestors: investors.length,
+        newInvestorsCount,
         totalCapital,
         netProfit,
         monthlyPerformance: equityGrowth,

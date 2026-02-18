@@ -19,7 +19,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { downloadInvestorReport } from "@/lib/reportUtils";
 
 const fmt = (n: number) => "₹" + n.toLocaleString("en-IN");
-const fmtDate = (d: string) => new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+const fmtDate = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const fmtMonth = (m: string) => {
   const [year, month] = m.split("-");
   const d = new Date(Number(year), Number(month) - 1);
@@ -59,9 +59,9 @@ const InvestorProfile = () => {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
+  // Separate form state for each dialog to prevent data leakage
   const [invForm, setInvForm] = useState({ amount: "", invested_date: new Date().toISOString().split("T")[0], notes: "", promised_return: "" });
   const [retForm, setRetForm] = useState({ month: "", return_percent: "" });
-  // Capital return initialization form
   const [initCapForm, setInitCapForm] = useState({ amount: "", initialized_date: new Date().toISOString().split("T")[0] });
   const [editForm, setEditForm] = useState({ full_name: "", email: "", phone: "", address: "" });
 
@@ -101,29 +101,40 @@ const InvestorProfile = () => {
   const totalCapitalReturned = deliveredEntries.reduce((s, e) => s + Number(e.amount), 0);
 
   // Remaining Capital = Total Invested - Capital Returned (delivered amounts)
-  const remainingCapital = totalInvested - totalCapitalReturned;
+  // Guard against negative values
+  const remainingCapital = Math.max(0, totalInvested - totalCapitalReturned);
 
   // --- Handlers ---
 
   const handleAddInvestment = async () => {
     if (!invForm.amount) { toast({ title: "Amount required", variant: "destructive" }); return; }
     if (Number(invForm.amount) <= 0) { toast({ title: "Amount must be positive", variant: "destructive" }); return; }
-    await addInvestment.mutateAsync({ investor_id: investor.id, amount: Number(invForm.amount), invested_date: invForm.invested_date, notes: invForm.notes, promised_return: invForm.promised_return ? Number(invForm.promised_return) : undefined });
-    logAction.mutate({ action: "Investment Added", referenceId: investor.client_id || "", module: "Investors", notes: `${fmt(Number(invForm.amount))} invested, promised ${invForm.promised_return}%` });
-    toast({ title: "Investment recorded" });
-    setInvForm({ amount: "", invested_date: new Date().toISOString().split("T")[0], notes: "", promised_return: "" });
-    setInvOpen(false);
+
+    try {
+      await addInvestment.mutateAsync({ investor_id: investor.id, amount: Number(invForm.amount), invested_date: invForm.invested_date, notes: invForm.notes, promised_return: invForm.promised_return ? Number(invForm.promised_return) : undefined });
+      logAction.mutate({ action: "Investment Added", referenceId: investor.client_id || "", module: "Investors", notes: `${fmt(Number(invForm.amount))} invested, promised ${invForm.promised_return}%` });
+      toast({ title: "Investment recorded" });
+      setInvForm({ amount: "", invested_date: new Date().toISOString().split("T")[0], notes: "", promised_return: "" });
+      setInvOpen(false);
+    } catch {
+      toast({ title: "Failed to add investment", variant: "destructive" });
+    }
   };
 
   const handleAddReturn = async () => {
     if (!retForm.month || !retForm.return_percent) { toast({ title: "Month & return % required", variant: "destructive" }); return; }
     // Auto-calculate amount based on percentage of remaining capital
     const calculatedAmount = Math.round(remainingCapital * (Number(retForm.return_percent) / 100));
-    await addReturn.mutateAsync({ investor_id: investor.id, month: retForm.month, amount: calculatedAmount, return_percent: Number(retForm.return_percent) || 0 });
-    logAction.mutate({ action: "Monthly Return Added", referenceId: investor.client_id || "", module: "Returns", notes: `${retForm.month}: ${fmt(calculatedAmount)} (${retForm.return_percent}%)` });
-    toast({ title: "Return recorded", description: `${fmt(calculatedAmount)} (${retForm.return_percent}% of ${fmt(remainingCapital)})` });
-    setRetForm({ month: "", return_percent: "" });
-    setRetOpen(false);
+
+    try {
+      await addReturn.mutateAsync({ investor_id: investor.id, month: retForm.month, amount: calculatedAmount, return_percent: Number(retForm.return_percent) || 0 });
+      logAction.mutate({ action: "Monthly Return Added", referenceId: investor.client_id || "", module: "Returns", notes: `${retForm.month}: ${fmt(calculatedAmount)} (${retForm.return_percent}%)` });
+      toast({ title: "Return recorded", description: `${fmt(calculatedAmount)} (${retForm.return_percent}% of ${fmt(remainingCapital)})` });
+      setRetForm({ month: "", return_percent: "" });
+      setRetOpen(false);
+    } catch {
+      toast({ title: "Failed to add return", variant: "destructive" });
+    }
   };
 
   /**
@@ -141,17 +152,27 @@ const InvestorProfile = () => {
       toast({ title: "Amount exceeds remaining capital", description: `Max returnable: ${fmt(remainingCapital)}`, variant: "destructive" });
       return;
     }
-    await addWaiting.mutateAsync({ investor_id: investor.id, amount: capAmount, initialized_date: initCapForm.initialized_date });
-    logAction.mutate({ action: "Capital Return Initialized", referenceId: investor.client_id || "", module: "Investors", notes: `${fmt(capAmount)} capital return initialized, enters 60-day waiting period` });
-    toast({ title: "Capital return initialized", description: "Will appear in Delivered Amounts after 60 days" });
-    setInitCapForm({ amount: "", initialized_date: new Date().toISOString().split("T")[0] });
-    setInitCapOpen(false);
+
+    try {
+      await addWaiting.mutateAsync({ investor_id: investor.id, amount: capAmount, initialized_date: initCapForm.initialized_date });
+      logAction.mutate({ action: "Capital Return Initialized", referenceId: investor.client_id || "", module: "Investors", notes: `${fmt(capAmount)} capital return initialized, enters 60-day waiting period` });
+      toast({ title: "Capital return initialized", description: "Will appear in Delivered Amounts after 60 days" });
+      setInitCapForm({ amount: "", initialized_date: new Date().toISOString().split("T")[0] });
+      setInitCapOpen(false);
+    } catch {
+      toast({ title: "Failed to initialize return", variant: "destructive" });
+    }
   };
 
   const handleUploadAgreement = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !investor) return;
-    const nextVersion = investorAgreements.length + 1;
+
+    // Improved version logic: max + 1
+    const maxVersion = investorAgreements.length > 0
+      ? Math.max(...investorAgreements.map(a => a.version))
+      : 0;
+    const nextVersion = maxVersion + 1;
     try {
       await uploadAgreement.mutateAsync({ investorId: investor.id, file, version: nextVersion });
       logAction.mutate({ action: "Agreement Uploaded", referenceId: investor.client_id || "", module: "Agreements", notes: file.name });
@@ -162,9 +183,14 @@ const InvestorProfile = () => {
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  const openAgreementFile = (path: string) => {
-    const { data } = supabase.storage.from("agreements").getPublicUrl(path);
-    window.open(data.publicUrl, "_blank");
+  const openAgreementFile = async (path: string) => {
+    // Use createSignedUrl for private buckets
+    const { data, error } = await supabase.storage.from("agreements").createSignedUrl(path, 60);
+    if (error || !data) {
+      toast({ title: "Failed to open file", variant: "destructive" });
+      return;
+    }
+    window.open(data.signedUrl, "_blank");
   };
 
   const generateAgreement = (inv: { amount: number; invested_date: string }) => {
@@ -639,8 +665,14 @@ li { margin-bottom: 3px; }
             ) : (
               deliveredEntries.map((entry) => {
                 const initDate = new Date(entry.initialized_date);
-                const deliveredDate = new Date(initDate);
-                deliveredDate.setDate(deliveredDate.getDate() + 60);
+                // Correct delivered date: Use delivered_at if manual override, else init + 60 days
+                const deliveredDate = entry.delivered_at
+                  ? new Date(entry.delivered_at)
+                  : (() => {
+                    const d = new Date(initDate);
+                    d.setDate(d.getDate() + 60);
+                    return d;
+                  })();
                 return (
                   <div key={entry.id} className="glass-card p-4 flex items-center justify-between">
                     <div>
@@ -673,8 +705,14 @@ li { margin-bottom: 3px; }
                   <tbody>
                     {deliveredEntries.map((entry) => {
                       const initDate = new Date(entry.initialized_date);
-                      const deliveredDate = new Date(initDate);
-                      deliveredDate.setDate(deliveredDate.getDate() + 60);
+                      // Correct delivered date logic
+                      const deliveredDate = entry.delivered_at
+                        ? new Date(entry.delivered_at)
+                        : (() => {
+                          const d = new Date(initDate);
+                          d.setDate(d.getDate() + 60);
+                          return d;
+                        })();
                       return (
                         <tr key={entry.id} className="border-b border-border/50 hover:bg-muted/30">
                           <td className="px-5 py-3 font-mono text-sm text-warning">{fmt(Number(entry.amount))}</td>

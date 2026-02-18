@@ -11,6 +11,7 @@ export const tradingAccountSchema = z.object({
         .min(0, "Capital cannot be negative")
         .max(10000000000, "Capital exceeds system limit")
         .optional(),
+    status: z.string().optional(),
 });
 
 export type TradingAccountFormValues = z.infer<typeof tradingAccountSchema>;
@@ -30,6 +31,7 @@ export const pnlSchema = z.object({
         .min(0, "Capital used cannot be negative")
         .max(10000000000, "Capital used exceeds limit"),
     notes: z.string().optional(),
+    setup_used: z.string().optional(),
 });
 
 export type PnLFormValues = z.infer<typeof pnlSchema>;

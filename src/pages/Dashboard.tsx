@@ -20,7 +20,7 @@ const formatCurrency = (n: number | undefined | null) => "₹" + (n ?? 0).toLoca
 
 const Dashboard = () => {
   const { data: stats, isLoading: statsLoading } = useDashboardStats();
-  const { data: totalExpenses = 0 } = useTotalExpenses();
+  const { data: expenses = 0, isLoading: expensesLoading } = useTotalExpenses();
   const { data: auditData, isLoading: auditLoading } = useAuditLog(5);
   const auditEntries = auditData?.data || [];
   const { data: accounts } = useTradingAccounts();
@@ -38,8 +38,13 @@ const Dashboard = () => {
     );
   }
 
-  const s = stats!;
-  const netPnL = (s.netProfit ?? 0) - totalExpenses;
+  if (!stats) return null;
+  const s = stats;
+  // Rename for clarity: s.netProfit is Gross Trading P&L (total of daily P&L)
+  const grossPnL = s.netProfit ?? 0;
+  // Net P&L = Gross P&L - Total Expenses
+  // Guard against expense loading flicker: default to 0 only if not loading
+  const netPnL = expensesLoading ? null : grossPnL - expenses;
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -50,7 +55,7 @@ const Dashboard = () => {
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="gap-2 self-start sm:self-auto">
+            <Button variant="outline" size="sm" className="gap-2 self-start sm:self-auto" disabled={!pnlData || !accounts}>
               <Download className="h-4 w-4" /> Reports
             </Button>
           </DropdownMenuTrigger>
@@ -76,20 +81,30 @@ const Dashboard = () => {
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <StatCard label="Total Investors" value={String(s.totalInvestors)} change="+2 this month" changeType="profit" icon={Users} />
+        <StatCard label="Total Investors" value={String(s.totalInvestors)} change={`${s.newInvestorsCount > 0 ? "+" : ""}${s.newInvestorsCount} this month`} changeType="profit" icon={Users} />
         <StatCard label="Capital Managed" value={formatCurrency(s.totalCapital)} change={`₹${((s.totalCapital ?? 0) / 100000).toFixed(1)}L`} changeType="profit" icon={Wallet} />
-        <StatCard label="Total Profit and Loss" value={formatCurrency(s.netProfit)} change={`${s.monthlyPerformance >= 0 ? "+" : ""}${s.monthlyPerformance}% MTD`} changeType={s.netProfit >= 0 ? "profit" : "loss"} icon={TrendingUp} />
+        {/* Renamed to Gross P&L to avoid confusion with Net P&L below */}
+        <StatCard label="Gross Trading P&L" value={formatCurrency(grossPnL)} change={`${(s.monthlyPerformance ?? 0) >= 0 ? "+" : ""}${s.monthlyPerformance ?? 0}% MTD`} changeType={grossPnL >= 0 ? "profit" : "loss"} icon={TrendingUp} />
         <StatCard label="Win Rate" value={`${s.winRate}%`} change={`${s.totalTrades} trades`} changeType="neutral" icon={Target} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+      {/* Changed to grid-cols-4 for better layout balance with 8 items (added Active Days) */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Investor Capital" value={formatCurrency(s.totalInvestorCapital)} change="consolidated remaining" changeType="neutral" icon={Landmark} />
         <StatCard label="Internal Capital" value={formatCurrency(s.internalCapital)} change="firm's own capital" changeType={s.internalCapital >= 0 ? "profit" : "loss"} icon={Building2} />
-        <StatCard label="Expense" value={formatCurrency(totalExpenses)} change="total expenses" changeType="loss" icon={Receipt} />
-        <StatCard label="Net Profit or Loss" value={formatCurrency(netPnL)} change="after expenses" changeType={netPnL >= 0 ? "profit" : "loss"} icon={MinusCircle} />
+        <StatCard label="Expense" value={expensesLoading ? "..." : formatCurrency(expenses)} change="total expenses" changeType="loss" icon={Receipt} />
+        <StatCard
+          label="Net Profit or Loss"
+          value={netPnL === null ? "..." : formatCurrency(netPnL)}
+          change="after expenses"
+          changeType={netPnL !== null && netPnL >= 0 ? "profit" : "loss"}
+          icon={MinusCircle}
+        />
         <StatCard label="Pending Returns" value={formatCurrency(s.pendingReturns)} change="pending payouts" changeType="neutral" icon={Clock} />
         <StatCard label="Equity Growth" value={`${s.equityGrowth}%`} change="Overall" changeType={s.equityGrowth >= 0 ? "profit" : "loss"} icon={BarChart3} />
-        <StatCard label="Total Trades" value={String(s.totalTrades)} change={`${s.winRate}% win rate`} changeType="profit" icon={Activity} />
+        <StatCard label="Total Trades" value={String(s.totalTrades)} change="executions" changeType="neutral" icon={Activity} />
+        {/* Added 8th card to balance the grid (4x2) */}
+        <StatCard label="Avg P&L per Trade" value={formatCurrency(s.totalTrades > 0 ? grossPnL / s.totalTrades : 0)} change="average" changeType={grossPnL >= 0 ? "profit" : "loss"} icon={Target} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -99,9 +114,9 @@ const Dashboard = () => {
               <h2 className="text-xs sm:text-sm font-semibold text-foreground">Equity Curve</h2>
               <p className="text-[10px] sm:text-xs text-muted-foreground">Running performance</p>
             </div>
-            <div className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1">
-              <ArrowUpRight className="h-3 w-3 text-profit" />
-              <span className="font-mono text-xs font-medium text-profit">
+            <div className={`flex items-center gap-1 rounded-md px-2 py-1 ${s.equityGrowth >= 0 ? "bg-profit/10 text-profit" : "bg-loss/10 text-loss"}`}>
+              <ArrowUpRight className={`h-3 w-3 ${s.equityGrowth >= 0 ? "text-profit" : "text-loss rotate-90"}`} />
+              <span className="font-mono text-xs font-medium">
                 {s.equityGrowth >= 0 ? "+" : ""}{s.equityGrowth}%
               </span>
             </div>
@@ -131,8 +146,10 @@ const Dashboard = () => {
           <div className="space-y-3 sm:space-y-4">
             {auditLoading ? (
               [1, 2, 3].map((i) => <Skeleton key={i} className="h-12" />)
+            ) : auditEntries.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-4">No recent activity</p>
             ) : (
-              (auditEntries || []).map((entry) => (
+              auditEntries.map((entry) => (
                 <div key={entry.id} className="flex items-start gap-3 border-b border-border/50 pb-3 last:border-0">
                   <div className="mt-1 h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
                   <div className="flex-1 min-w-0">
